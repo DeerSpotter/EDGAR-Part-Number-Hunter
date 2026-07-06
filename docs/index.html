@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07111f">
   <title>EDGAR Part Number Hunter</title>
-  <meta name="description" content="Search SEC EDGAR filings for part numbers, NSNs, contract numbers, CAGE codes, and defense logistics terms.">
+  <meta name="description" content="Build SEC EDGAR full text searches for part numbers, NSNs, contract numbers, and technical keywords without an API.">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -14,7 +14,7 @@
       <div class="mark" aria-hidden="true">EH</div>
       <div>
         <h1>EDGAR Part Number Hunter</h1>
-        <p>Defense supply chain research in SEC filings</p>
+        <p>Keyword search builder for SEC filings</p>
       </div>
     </div>
     <a class="ghost-link" href="https://www.sec.gov/edgar/search/" target="_blank" rel="noreferrer">SEC Full Text Search ↗</a>
@@ -24,20 +24,39 @@
     <section class="panel search-panel">
       <div class="section-heading">
         <div>
-          <span class="eyebrow">SEARCH TARGETS</span>
-          <h2>Find identifiers buried in EDGAR</h2>
+          <span class="eyebrow">KEYWORD SEARCH</span>
+          <h2>Search EDGAR like a contract database</h2>
         </div>
-        <span class="status-pill" id="apiStatus">Ready</span>
+        <span class="status-pill ok">No API</span>
       </div>
 
-      <label for="queries">Part numbers, NSNs, contract numbers, CAGE codes, or terms</label>
-      <textarea id="queries" rows="7" spellcheck="false" placeholder="One target per line&#10;&#10;4G16311&#10;F34601-99-D-0002&#10;1560-01-234-5678&#10;government furnished material"></textarea>
+      <label for="keywords">Keywords or identifiers</label>
+      <textarea id="keywords" rows="7" spellcheck="false" placeholder="One keyword or identifier per line&#10;&#10;4G16311&#10;F34601-99-D-0002&#10;T56&#10;government furnished material"></textarea>
       <div class="hint-row">
-        <span>One search per line. Duplicates are removed.</span>
+        <span>One item per line. Build one combined SEC search or individual searches.</span>
         <button class="text-button" id="loadExample" type="button">Load examples</button>
       </div>
 
       <div class="filters">
+        <div class="field grow">
+          <label for="matchMode">Keyword logic</label>
+          <select id="matchMode">
+            <option value="any">Any keyword</option>
+            <option value="all">All keywords</option>
+            <option value="exact" selected>Exact phrase / identifier</option>
+          </select>
+        </div>
+        <div class="field grow">
+          <label for="forms">Filing focus</label>
+          <select id="forms">
+            <option value="">All SEC forms</option>
+            <option value="10-K,10-Q,8-K,S-1,S-3">Material filing forms</option>
+            <option value="EX-10">Exhibit 10 contracts</option>
+            <option value="10-K">10-K only</option>
+            <option value="10-Q">10-Q only</option>
+            <option value="8-K">8-K only</option>
+          </select>
+        </div>
         <div class="field">
           <label for="startDate">Filed after</label>
           <input id="startDate" type="date" value="1994-01-01">
@@ -46,73 +65,49 @@
           <label for="endDate">Filed before</label>
           <input id="endDate" type="date">
         </div>
-        <div class="field grow">
-          <label for="forms">Forms</label>
-          <select id="forms">
-            <option value="">All forms</option>
-            <option value="10-K,10-Q,8-K,S-1,S-3">Material filing forms</option>
-            <option value="EX-10">Exhibit 10 focus</option>
-            <option value="10-K">10-K only</option>
-            <option value="10-Q">10-Q only</option>
-            <option value="8-K">8-K only</option>
-          </select>
-        </div>
-        <div class="field compact">
-          <label for="limit">Per target</label>
-          <select id="limit">
-            <option>10</option>
-            <option selected>25</option>
-            <option>50</option>
-            <option>100</option>
-          </select>
-        </div>
       </div>
 
+      <label for="excludeKeywords">Exclude keywords <span class="optional">optional</span></label>
+      <textarea id="excludeKeywords" class="small-textarea" rows="3" spellcheck="false" placeholder="One excluded word or phrase per line"></textarea>
+
       <div class="options-row">
-        <label class="check"><input id="exactPhrase" type="checkbox" checked><span>Exact phrase</span></label>
-        <label class="check"><input id="defenseOnly" type="checkbox"><span>Defense signals only</span></label>
-        <label class="check"><input id="rememberSearches" type="checkbox" checked><span>Remember searches locally</span></label>
+        <label class="check"><input id="rememberSearches" type="checkbox" checked><span>Remember searches on this device</span></label>
+        <label class="check"><input id="openNewTab" type="checkbox" checked><span>Open SEC in a new tab</span></label>
       </div>
 
       <div class="action-row">
-        <button class="primary" id="searchButton" type="button">Search EDGAR</button>
-        <button class="secondary" id="stopButton" type="button" disabled>Stop</button>
-        <span id="progressText" class="progress-text">No search running</span>
+        <button class="primary" id="searchCombined" type="button">Search SEC</button>
+        <button class="secondary" id="buildQueue" type="button">Build individual searches</button>
+        <button class="secondary" id="copyQuery" type="button">Copy query</button>
+        <span id="queryStatus" class="progress-text">Enter keywords to begin</span>
       </div>
-      <div class="progress-track" aria-hidden="true"><div id="progressBar" class="progress-bar"></div></div>
 
-      <p class="notice">This browser app intentionally searches targets sequentially and pauses between requests. SEC fair access guidance currently caps automated access at 10 requests per second. Filing retrieval may be blocked by browser cross origin controls; direct SEC links remain available for every result.</p>
+      <p class="notice"><strong>No SEC API is used.</strong> This page only builds normal SEC EDGAR full text search URLs and sends your search to SEC.gov when you press a button.</p>
     </section>
 
     <section class="stats" aria-label="Search statistics">
-      <article><span id="targetCount">0</span><small>Targets</small></article>
-      <article><span id="resultCount">0</span><small>Matches</small></article>
-      <article><span id="highCount">0</span><small>High relevance</small></article>
-      <article><span id="companyCount">0</span><small>Companies</small></article>
+      <article><span id="keywordCount">0</span><small>Keywords</small></article>
+      <article><span id="excludeCount">0</span><small>Excluded</small></article>
+      <article><span id="searchCount">0</span><small>Searches built</small></article>
+      <article><span id="modeLabel">EXACT</span><small>Logic</small></article>
     </section>
 
     <section class="panel results-panel">
       <div class="section-heading results-heading">
         <div>
-          <span class="eyebrow">RESULTS</span>
-          <h2>Matched filings</h2>
+          <span class="eyebrow">SEARCH QUEUE</span>
+          <h2>SEC keyword searches</h2>
         </div>
         <div class="result-actions">
-          <input id="resultFilter" type="search" placeholder="Filter results">
-          <select id="sortResults" aria-label="Sort results">
-            <option value="score">Highest relevance</option>
-            <option value="date">Newest filing</option>
-            <option value="company">Company</option>
-          </select>
-          <button class="secondary" id="exportCsv" type="button" disabled>CSV</button>
-          <button class="secondary" id="exportJson" type="button" disabled>JSON</button>
+          <button class="secondary" id="openAll" type="button" disabled>Open all</button>
+          <button class="secondary" id="clearQueue" type="button" disabled>Clear</button>
         </div>
       </div>
 
       <div id="emptyState" class="empty-state">
         <div class="radar" aria-hidden="true"><span></span></div>
-        <h3>No EDGAR hunt started</h3>
-        <p>Search a known part number, NSN, contract number, CAGE code, or program term. The hunter ranks filings by defense and logistics signals.</p>
+        <h3>No search queue yet</h3>
+        <p>Enter part numbers, contract numbers, NSNs, program names, or technical terms. Build individual searches to create one SEC.gov search card for each keyword.</p>
       </div>
 
       <div id="results" class="results" aria-live="polite"></div>
@@ -122,7 +117,7 @@
       <div class="section-heading">
         <div>
           <span class="eyebrow">LOCAL HISTORY</span>
-          <h2>Recent targets</h2>
+          <h2>Recent keywords</h2>
         </div>
         <button class="text-button" id="clearHistory" type="button">Clear</button>
       </div>
@@ -132,7 +127,7 @@
 
   <footer>
     <p>Independent research tool. Not affiliated with or endorsed by the U.S. Securities and Exchange Commission.</p>
-    <p>Source data opens on <a href="https://www.sec.gov/" target="_blank" rel="noreferrer">SEC.gov</a>.</p>
+    <p>All searches open on <a href="https://www.sec.gov/edgar/search/" target="_blank" rel="noreferrer">SEC.gov</a>.</p>
   </footer>
 
   <script src="app.js" defer></script>
