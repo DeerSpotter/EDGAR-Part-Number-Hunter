@@ -9,8 +9,8 @@
   <meta http-equiv="Expires" content="0">
   <title>EDGAR Part Number Hunter</title>
   <meta name="description" content="Search SEC EDGAR filings for part numbers, NSNs, contract numbers, and technical keywords.">
-  <link rel="stylesheet" href="styles.css?v=worker-ui-5-20260706">
-  <link rel="stylesheet" href="search.css?v=worker-ui-5-20260706">
+  <link rel="stylesheet" href="styles.css?v=worker-ui-7-20260706">
+  <link rel="stylesheet" href="search.css?v=worker-ui-7-20260706">
 </head>
 <body>
   <header class="topbar">
@@ -18,7 +18,7 @@
       <div class="mark" aria-hidden="true">EH</div>
       <div>
         <h1>EDGAR Part Number Hunter</h1>
-        <p>Full text keyword search for SEC filings · Build 5 Worker Search</p>
+        <p>Full text keyword search for SEC filings · Build 7 Worker Search</p>
       </div>
     </div>
     <a class="ghost-link" href="https://www.sec.gov/edgar/search/" target="_blank" rel="noreferrer">SEC Full Text Search ↗</a>
@@ -94,7 +94,7 @@
       </div>
       <div class="progress-track" aria-hidden="true"><div id="progressBar" class="progress-bar"></div></div>
 
-      <p class="notice">Searches run through the connected Cloudflare Worker at <code>edgar-part-number-hunter.spotterdeer.workers.dev</code>. Filing links still point directly to SEC.gov.</p>
+      <p class="notice">Searches run through the connected Cloudflare Worker at <code>edgar-part-number-hunter.spotterdeer.workers.dev</code>. Worker diagnostics are available at <code>/diagnostic</code>. Filing links still point directly to SEC.gov.</p>
     </section>
 
     <section class="stats" aria-label="Search statistics">
@@ -148,6 +148,6 @@
     <p>Filing source data opens on <a href="https://www.sec.gov/" target="_blank" rel="noreferrer">SEC.gov</a>.</p>
   </footer>
 
-  <script src="app.js?v=worker-ui-5-20260706" defer></script>
+  <script src="app.js?v=worker-ui-7-20260706" defer></script>
 </body>
 </html>

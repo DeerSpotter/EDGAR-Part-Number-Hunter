@@ -3,7 +3,11 @@
   "name": "edgar-part-number-hunter",
   "main": "worker/src/index.js",
   "compatibility_date": "2026-07-06",
+  "workers_dev": true,
   "observability": {
     "enabled": true
+  },
+  "vars": {
+    "SEC_USER_AGENT": "DeerSpotter EDGAR-Part-Number-Hunter 16710090+DeerSpotter@users.noreply.github.com"
   }
 }

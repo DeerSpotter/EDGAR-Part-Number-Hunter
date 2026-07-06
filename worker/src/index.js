@@ -1,6 +1,8 @@
 const SEC_SEARCH_ENDPOINT = 'https://efts.sec.gov/LATEST/search-index';
 const SEC_ARCHIVES = 'https://www.sec.gov/Archives/edgar/data';
-const DEFAULT_USER_AGENT = 'DeerSpotter EDGAR-Part-Number-Hunter https://github.com/DeerSpotter/EDGAR-Part-Number-Hunter';
+const SEC_TICKERS_ENDPOINT = 'https://www.sec.gov/files/company_tickers.json';
+const DEFAULT_USER_AGENT = 'DeerSpotter EDGAR-Part-Number-Hunter 16710090+DeerSpotter@users.noreply.github.com';
+const WORKER_BUILD = 'worker-7-declared-contact';
 const MAX_RESULTS = 100;
 
 const corsHeaders = {
@@ -21,14 +23,21 @@ export default {
     }
 
     const url = new URL(request.url);
+    const userAgent = env.SEC_USER_AGENT || DEFAULT_USER_AGENT;
 
     if (url.pathname === '/' || url.pathname === '/health') {
       return json({
         ok: true,
         service: 'EDGAR Part Number Hunter',
-        build: 'worker-6-sec-fair-access',
+        build: WORKER_BUILD,
         endpoint: '/search?q=launcher',
+        diagnostic: '/diagnostic',
+        sec_identity_configured: /@/.test(userAgent),
       });
+    }
+
+    if (url.pathname === '/diagnostic') {
+      return runDiagnostic(userAgent);
     }
 
     if (url.pathname !== '/search') {
@@ -49,7 +58,7 @@ export default {
     const secUrl = new URL(SEC_SEARCH_ENDPOINT);
     secUrl.searchParams.set('q', query);
     secUrl.searchParams.set('from', String(from));
-    secUrl.searchParams.set('count', String(size));
+    secUrl.searchParams.set('size', String(size));
 
     if (startDate || endDate) secUrl.searchParams.set('dateRange', 'custom');
     if (startDate) secUrl.searchParams.set('startdt', startDate);
@@ -63,12 +72,9 @@ export default {
 
     try {
       const response = await fetch(secUrl.toString(), {
+        method: 'GET',
         redirect: 'follow',
-        headers: {
-          Accept: 'application/json',
-          'Accept-Encoding': 'gzip, deflate',
-          'User-Agent': env.SEC_USER_AGENT || DEFAULT_USER_AGENT,
-        },
+        headers: secHeaders(userAgent),
       });
 
       if (!response.ok) {
@@ -77,9 +83,11 @@ export default {
           error: `SEC EDGAR returned HTTP ${response.status}`,
           upstream_status: response.status,
           upstream_excerpt: body.slice(0, 500),
-          worker_build: 'worker-6-sec-fair-access',
+          worker_build: WORKER_BUILD,
+          retry_after: response.headers.get('retry-after') || '',
+          upstream_server: response.headers.get('server') || '',
           note: response.status === 403
-            ? 'SEC refused the Worker request. This Worker uses the SEC documented declared User-Agent and gzip/deflate request headers.'
+            ? 'SEC refused the Cloudflare Worker egress request even though a declared contact User-Agent is configured. Open /diagnostic to compare EFTS and a documented static SEC data endpoint.'
             : '',
         }, 502);
       }
@@ -95,7 +103,7 @@ export default {
         from,
         size,
         returned: results.length,
-        worker_build: 'worker-6-sec-fair-access',
+        worker_build: WORKER_BUILD,
         results,
       });
 
@@ -106,11 +114,65 @@ export default {
       return json({
         error: 'Worker could not search SEC EDGAR',
         detail: error instanceof Error ? error.message : String(error),
-        worker_build: 'worker-6-sec-fair-access',
+        worker_build: WORKER_BUILD,
       }, 502);
     }
   },
 };
+
+async function runDiagnostic(userAgent) {
+  const searchUrl = new URL(SEC_SEARCH_ENDPOINT);
+  searchUrl.searchParams.set('q', 'launcher');
+  searchUrl.searchParams.set('from', '0');
+  searchUrl.searchParams.set('size', '1');
+
+  const [efts, staticData] = await Promise.all([
+    probeSec(searchUrl.toString(), userAgent),
+    probeSec(SEC_TICKERS_ENDPOINT, userAgent),
+  ]);
+
+  return json({
+    ok: efts.ok,
+    build: WORKER_BUILD,
+    sec_identity_configured: /@/.test(userAgent),
+    probes: {
+      efts_search: efts,
+      documented_static_data: staticData,
+    },
+  }, efts.ok ? 200 : 502);
+}
+
+async function probeSec(url, userAgent) {
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: secHeaders(userAgent),
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      content_type: response.headers.get('content-type') || '',
+      retry_after: response.headers.get('retry-after') || '',
+      server: response.headers.get('server') || '',
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function secHeaders(userAgent) {
+  return {
+    Accept: 'application/json',
+    'Accept-Encoding': 'gzip, deflate',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'User-Agent': userAgent,
+  };
+}
 
 function normalizeHit(hit) {
   const source = hit?._source || {};
