@@ -1,0 +1,35 @@
+.small-textarea {
+  min-height: 84px;
+  margin-bottom: 4px;
+}
+
+.optional {
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 500;
+  margin-left: 6px;
+}
+
+.search-panel > label[for="excludeKeywords"] {
+  margin-top: 24px;
+}
+
+.action-row {
+  flex-wrap: wrap;
+}
+
+.result-links button {
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .action-row .primary,
+  .action-row .secondary {
+    flex: 1 1 100%;
+  }
+
+  .action-row .progress-text {
+    width: 100%;
+    margin-top: 6px;
+  }
+}
