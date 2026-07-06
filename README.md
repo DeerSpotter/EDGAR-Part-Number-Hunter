@@ -38,7 +38,13 @@ The browser no longer redirects to the SEC search page to execute a search. It c
 
 ## Worker
 
-Worker source is in `worker/src/index.js` and Wrangler configuration is in `worker/wrangler.toml`.
+Worker source is in `worker/src/index.js`.
+
+The repository root `wrangler.jsonc` points Cloudflare Git deployments directly to that Worker entry point:
+
+```text
+worker/src/index.js
+```
 
 The Worker exposes:
 
@@ -47,7 +53,7 @@ GET /health
 GET /search?q=launcher&startdt=1994-01-01&enddt=2026-07-06&size=50
 ```
 
-Deploy the Worker source to the Cloudflare Worker named `edgar-part-number-hunter`. The Pages app checks `/health` on load and shows `Worker online` when the deployed Worker matches this implementation.
+Cloudflare should deploy the Worker named `edgar-part-number-hunter` from the repository root using `npx wrangler deploy`. The Pages app checks `/health` on load and shows `Worker online` when the deployed Worker matches this implementation.
 
 The Worker sends an identifying User Agent to SEC EDGAR, caps result size at 100, caches identical searches for 60 seconds, and returns CORS enabled JSON for the Pages UI.
 
