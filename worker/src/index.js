@@ -1,6 +1,6 @@
 const SEC_SEARCH_ENDPOINT = 'https://efts.sec.gov/LATEST/search-index';
 const SEC_ARCHIVES = 'https://www.sec.gov/Archives/edgar/data';
-const DEFAULT_USER_AGENT = 'EDGAR-Part-Number-Hunter/1.0 https://github.com/DeerSpotter/EDGAR-Part-Number-Hunter';
+const DEFAULT_USER_AGENT = 'DeerSpotter EDGAR-Part-Number-Hunter https://github.com/DeerSpotter/EDGAR-Part-Number-Hunter';
 const MAX_RESULTS = 100;
 
 const corsHeaders = {
@@ -26,6 +26,7 @@ export default {
       return json({
         ok: true,
         service: 'EDGAR Part Number Hunter',
+        build: 'worker-6-sec-fair-access',
         endpoint: '/search?q=launcher',
       });
     }
@@ -48,7 +49,7 @@ export default {
     const secUrl = new URL(SEC_SEARCH_ENDPOINT);
     secUrl.searchParams.set('q', query);
     secUrl.searchParams.set('from', String(from));
-    secUrl.searchParams.set('size', String(size));
+    secUrl.searchParams.set('count', String(size));
 
     if (startDate || endDate) secUrl.searchParams.set('dateRange', 'custom');
     if (startDate) secUrl.searchParams.set('startdt', startDate);
@@ -62,8 +63,10 @@ export default {
 
     try {
       const response = await fetch(secUrl.toString(), {
+        redirect: 'follow',
         headers: {
           Accept: 'application/json',
+          'Accept-Encoding': 'gzip, deflate',
           'User-Agent': env.SEC_USER_AGENT || DEFAULT_USER_AGENT,
         },
       });
@@ -73,7 +76,11 @@ export default {
         return json({
           error: `SEC EDGAR returned HTTP ${response.status}`,
           upstream_status: response.status,
-          upstream_excerpt: body.slice(0, 300),
+          upstream_excerpt: body.slice(0, 500),
+          worker_build: 'worker-6-sec-fair-access',
+          note: response.status === 403
+            ? 'SEC refused the Worker request. This Worker uses the SEC documented declared User-Agent and gzip/deflate request headers.'
+            : '',
         }, 502);
       }
 
@@ -88,6 +95,7 @@ export default {
         from,
         size,
         returned: results.length,
+        worker_build: 'worker-6-sec-fair-access',
         results,
       });
 
@@ -98,6 +106,7 @@ export default {
       return json({
         error: 'Worker could not search SEC EDGAR',
         detail: error instanceof Error ? error.message : String(error),
+        worker_build: 'worker-6-sec-fair-access',
       }, 502);
     }
   },
@@ -106,7 +115,7 @@ export default {
 function normalizeHit(hit) {
   const source = hit?._source || {};
   const hitId = String(hit?._id || '');
-  const accession = extractAccession(source.file_num || hitId);
+  const accession = extractAccession(source.file_num || source.adsh || hitId);
   const accessionFolder = accession.replace(/-/g, '');
   const cik = String(first(source.ciks) || source.cik || '').replace(/^0+/, '');
   const filename = extractFilename(hitId, source);
@@ -125,9 +134,9 @@ function normalizeHit(hit) {
   return {
     company,
     cik,
-    form: String(source.form_type || ''),
+    form: String(source.form_type || source.form || ''),
     filed: String(source.file_date || ''),
-    period_of_report: String(source.period_of_report || ''),
+    period_of_report: String(source.period_of_report || source.period_ending || ''),
     accession,
     filename,
     context,
@@ -146,7 +155,7 @@ function extractContext(hit) {
   if (snippets.length) return snippets.slice(0, 3).join(' … ');
 
   const source = hit?._source || {};
-  return [source.entity_name, source.form_type, source.file_num]
+  return [source.entity_name, source.form_type || source.form, source.file_num || source.adsh]
     .filter(Boolean)
     .join(' | ');
 }
