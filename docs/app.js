@@ -1,436 +1,265 @@
 (() => {
   'use strict';
 
-  const SEC_SEARCH_API = 'https://efts.sec.gov/LATEST/search-index';
-  const SEC_FULL_TEXT = 'https://www.sec.gov/edgar/search/';
-  const REQUEST_DELAY_MS = 350;
-  const HISTORY_KEY = 'edgarHunterHistoryV1';
-
-  const SIGNALS = [
-    ['government furnished', 12], ['gfm', 8], ['gfp', 8], ['government property', 8],
-    ['nsn', 12], ['national stock number', 12], ['cage', 10], ['milstrip', 14],
-    ['dfars', 10], ['far ', 5], ['subcontract', 8], ['contract number', 7],
-    ['air force', 7], ['army', 5], ['navy', 5], ['department of defense', 8], ['dod', 6],
-    ['logistics', 6], ['sustainment', 8], ['repair', 4], ['overhaul', 6], ['depot', 6],
-    ['technical data', 5], ['configuration management', 6], ['special tooling', 7],
-    ['spare parts', 7], ['supply', 3], ['weapon system', 8], ['missile', 8], ['aircraft', 5],
-    ['exhibit 10', 7], ['material contract', 7], ['statement of work', 7], ['sow', 4]
-  ];
+  const SEC_SEARCH = 'https://www.sec.gov/edgar/search/';
+  const HISTORY_KEY = 'edgarKeywordHistoryV2';
 
   const $ = (id) => document.getElementById(id);
   const ui = {
-    queries: $('queries'), startDate: $('startDate'), endDate: $('endDate'), forms: $('forms'), limit: $('limit'),
-    exactPhrase: $('exactPhrase'), defenseOnly: $('defenseOnly'), rememberSearches: $('rememberSearches'),
-    searchButton: $('searchButton'), stopButton: $('stopButton'), apiStatus: $('apiStatus'), progressText: $('progressText'), progressBar: $('progressBar'),
-    targetCount: $('targetCount'), resultCount: $('resultCount'), highCount: $('highCount'), companyCount: $('companyCount'),
-    resultFilter: $('resultFilter'), sortResults: $('sortResults'), exportCsv: $('exportCsv'), exportJson: $('exportJson'),
-    emptyState: $('emptyState'), results: $('results'), history: $('history'), clearHistory: $('clearHistory'), loadExample: $('loadExample')
+    keywords: $('keywords'),
+    excludeKeywords: $('excludeKeywords'),
+    matchMode: $('matchMode'),
+    forms: $('forms'),
+    startDate: $('startDate'),
+    endDate: $('endDate'),
+    rememberSearches: $('rememberSearches'),
+    openNewTab: $('openNewTab'),
+    searchCombined: $('searchCombined'),
+    buildQueue: $('buildQueue'),
+    copyQuery: $('copyQuery'),
+    queryStatus: $('queryStatus'),
+    keywordCount: $('keywordCount'),
+    excludeCount: $('excludeCount'),
+    searchCount: $('searchCount'),
+    modeLabel: $('modeLabel'),
+    openAll: $('openAll'),
+    clearQueue: $('clearQueue'),
+    emptyState: $('emptyState'),
+    results: $('results'),
+    history: $('history'),
+    clearHistory: $('clearHistory'),
+    loadExample: $('loadExample')
   };
 
-  let controller = null;
-  let allResults = [];
-  let errors = [];
-
+  let queue = [];
   ui.endDate.value = new Date().toISOString().slice(0, 10);
 
-  function parseTargets() {
-    return [...new Set(ui.queries.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean))];
+  function uniqueLines(value) {
+    return [...new Set(String(value || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean))];
   }
 
-  function sleep(ms, signal) {
-    return new Promise((resolve, reject) => {
-      const id = setTimeout(resolve, ms);
-      signal?.addEventListener('abort', () => {
-        clearTimeout(id);
-        reject(new DOMException('Search stopped', 'AbortError'));
-      }, { once: true });
-    });
+  function keywords() {
+    return uniqueLines(ui.keywords.value);
   }
 
-  function setStatus(text, kind = '') {
-    ui.apiStatus.textContent = text;
-    ui.apiStatus.className = `status-pill ${kind}`.trim();
+  function exclusions() {
+    return uniqueLines(ui.excludeKeywords.value);
   }
 
-  function setProgress(done, total, label) {
-    const percent = total ? Math.round((done / total) * 100) : 0;
-    ui.progressBar.style.width = `${percent}%`;
-    ui.progressText.textContent = label;
+  function quote(value) {
+    return `"${String(value).replace(/"/g, '')}"`;
   }
 
-  function normalizeAccession(value) {
-    const text = String(value || '').trim();
-    const match = text.match(/\d{10}-\d{2}-\d{6}/);
-    return match ? match[0] : text;
-  }
+  function buildQuery(items) {
+    const mode = ui.matchMode.value;
+    let query = '';
 
-  function first(value) {
-    return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
-  }
-
-  function stripHtml(text) {
-    const temp = document.createElement('div');
-    temp.innerHTML = String(text || '');
-    return (temp.textContent || temp.innerText || '').replace(/\s+/g, ' ').trim();
-  }
-
-  function sourceText(hit, target) {
-    const src = hit?._source || {};
-    const highlighted = hit?.highlight ? Object.values(hit.highlight).flat().join(' … ') : '';
-    return stripHtml([
-      highlighted,
-      src.entity_name,
-      first(src.display_names),
-      src.form_type,
-      src.root_forms,
-      src.file_num,
-      target
-    ].filter(Boolean).join(' | '));
-  }
-
-  function classifyTarget(target) {
-    if (/^\d{4}-\d{2}-\d{3}-\d{4}$/.test(target)) return 'NSN';
-    if (/^\d{13}$/.test(target.replace(/[- ]/g, ''))) return 'NSN';
-    if (/^[A-Z0-9]{5}$/i.test(target)) return 'CAGE / short identifier';
-    if (/^[A-Z]\d{4,6}-\d{2}-[A-Z]-\d{4,}$/i.test(target) || /[A-Z]\d{5}-\d{2}-D-\d{4}/i.test(target)) return 'Contract';
-    if (/^(?=.*\d)(?=.*[A-Z])[A-Z0-9][A-Z0-9_.\/-]{4,}$/i.test(target)) return 'Part number';
-    return 'Term';
-  }
-
-  function scoreHit(hit, target) {
-    const src = hit?._source || {};
-    const text = sourceText(hit, target).toLowerCase();
-    const targetLower = target.toLowerCase();
-    let score = 18;
-    const signals = [];
-
-    if (text.includes(targetLower)) score += 28;
-    const targetType = classifyTarget(target);
-    if (targetType === 'Part number' || targetType === 'NSN' || targetType === 'Contract') score += 10;
-
-    const form = String(src.form_type || '').toUpperCase();
-    if (form.startsWith('EX-10')) { score += 18; signals.push('Exhibit 10'); }
-    else if (['10-K', '10-Q', '8-K', 'S-1', 'S-3'].includes(form)) score += 5;
-
-    for (const [term, points] of SIGNALS) {
-      if (text.includes(term)) {
-        score += points;
-        signals.push(term.toUpperCase());
-      }
+    if (mode === 'exact') {
+      query = items.map(quote).join(' OR ');
+    } else if (mode === 'all') {
+      query = items.map(item => `(${item})`).join(' AND ');
+    } else {
+      query = items.map(item => `(${item})`).join(' OR ');
     }
 
-    score = Math.min(100, score);
-    return { score, signals: [...new Set(signals)].slice(0, 8), targetType };
-  }
-
-  function filingUrl(src, hit) {
-    const cik = String(first(src.ciks) || src.cik || '').replace(/^0+/, '');
-    const accession = normalizeAccession(src.file_num || hit?._id || '');
-    const accessionFolder = accession.replace(/-/g, '');
-    if (cik && /^\d{10}-\d{2}-\d{6}$/.test(accession)) {
-      return `https://www.sec.gov/Archives/edgar/data/${encodeURIComponent(cik)}/${accessionFolder}/${accession}-index.html`;
+    const blocked = exclusions();
+    if (blocked.length) {
+      query += blocked.map(item => ` NOT ${quote(item)}`).join('');
     }
-    return SEC_FULL_TEXT;
+
+    return query.trim();
   }
 
-  function makeSearchUrl(target) {
+  function buildSecUrl(query) {
     const params = new URLSearchParams();
-    params.set('q', target);
-    if (ui.startDate.value) params.set('dateRange', 'custom');
+    params.set('q', query);
+    if (ui.startDate.value || ui.endDate.value) params.set('dateRange', 'custom');
     if (ui.startDate.value) params.set('startdt', ui.startDate.value);
     if (ui.endDate.value) params.set('enddt', ui.endDate.value);
     if (ui.forms.value) params.set('forms', ui.forms.value);
-    params.set('from', '0');
-    params.set('size', ui.limit.value);
-    return `${SEC_SEARCH_API}?${params.toString()}`;
+    return `${SEC_SEARCH}#/${params.toString()}`;
   }
 
-  function makeSecFallbackUrl(target) {
-    const params = new URLSearchParams();
-    params.set('q', ui.exactPhrase.checked ? `"${target}"` : target);
-    if (ui.startDate.value) params.set('dateRange', 'custom');
-    if (ui.startDate.value) params.set('startdt', ui.startDate.value);
-    if (ui.endDate.value) params.set('enddt', ui.endDate.value);
-    return `${SEC_FULL_TEXT}#/${params.toString()}`;
-  }
-
-  async function searchTarget(target, signal) {
-    const query = ui.exactPhrase.checked ? `"${target}"` : target;
-    const url = makeSearchUrl(query);
-    const response = await fetch(url, { signal, headers: { Accept: 'application/json' } });
-    if (!response.ok) throw new Error(`SEC search returned HTTP ${response.status}`);
-    const data = await response.json();
-    const hits = data?.hits?.hits || [];
-    return hits.map((hit, index) => {
-      const src = hit?._source || {};
-      const ranked = scoreHit(hit, target);
-      const company = first(src.display_names) || src.entity_name || 'Unknown filer';
-      const accession = normalizeAccession(src.file_num || hit?._id || '');
-      return {
-        id: `${target}-${accession}-${index}`,
-        target,
-        targetType: ranked.targetType,
-        score: ranked.score,
-        signals: ranked.signals,
-        company: String(company),
-        cik: String(first(src.ciks) || src.cik || ''),
-        form: String(src.form_type || 'Unknown form'),
-        filed: String(src.file_date || ''),
-        period: String(src.period_of_report || ''),
-        accession,
-        context: sourceText(hit, target) || `EDGAR full text match for ${target}`,
-        url: filingUrl(src, hit),
-        secSearchUrl: makeSecFallbackUrl(target)
-      };
-    });
-  }
-
-  function relevanceClass(score) {
-    if (score >= 70) return 'high';
-    if (score >= 45) return 'medium';
-    return 'low';
+  function openUrl(url) {
+    if (ui.openNewTab.checked) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } else {
+      window.location.href = url;
+    }
   }
 
   function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+    return String(value ?? '').replace(/[&<>'"]/g, char => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+    })[char]);
   }
 
-  function visibleResults() {
-    const filter = ui.resultFilter.value.trim().toLowerCase();
-    let results = allResults.filter(item => {
-      if (ui.defenseOnly.checked && item.signals.length === 0) return false;
-      if (!filter) return true;
-      return [item.target, item.company, item.cik, item.form, item.accession, item.context, item.signals.join(' ')].join(' ').toLowerCase().includes(filter);
-    });
-
-    const mode = ui.sortResults.value;
-    results = [...results].sort((a, b) => {
-      if (mode === 'date') return b.filed.localeCompare(a.filed) || b.score - a.score;
-      if (mode === 'company') return a.company.localeCompare(b.company) || b.score - a.score;
-      return b.score - a.score || b.filed.localeCompare(a.filed);
-    });
-    return results;
+  function updateStats() {
+    ui.keywordCount.textContent = String(keywords().length);
+    ui.excludeCount.textContent = String(exclusions().length);
+    ui.searchCount.textContent = String(queue.length);
+    ui.modeLabel.textContent = ui.matchMode.value.toUpperCase();
+    ui.openAll.disabled = queue.length === 0;
+    ui.clearQueue.disabled = queue.length === 0;
   }
 
-  function render() {
-    const results = visibleResults();
-    ui.targetCount.textContent = String(new Set(allResults.map(r => r.target)).size || parseTargets().length);
-    ui.resultCount.textContent = String(results.length);
-    ui.highCount.textContent = String(results.filter(r => r.score >= 70).length);
-    ui.companyCount.textContent = String(new Set(results.map(r => r.company)).size);
-    ui.exportCsv.disabled = allResults.length === 0;
-    ui.exportJson.disabled = allResults.length === 0;
-    ui.emptyState.hidden = allResults.length > 0 || errors.length > 0;
-
-    const cards = results.map(item => {
-      const kind = relevanceClass(item.score);
-      const badges = [item.targetType, ...item.signals].map((tag, i) => `<span class="badge ${i ? 'signal' : ''}">${escapeHtml(tag)}</span>`).join('');
-      return `
-        <article class="result-card">
-          <div class="score ${kind}"><strong>${item.score}</strong><small>score</small></div>
-          <div class="result-main">
-            <h3>${escapeHtml(item.company)}</h3>
-            <div class="result-meta">
-              <span>${escapeHtml(item.form)}</span>
-              <span>Filed ${escapeHtml(item.filed || 'unknown')}</span>
-              ${item.cik ? `<span>CIK ${escapeHtml(item.cik)}</span>` : ''}
-              ${item.accession ? `<span>${escapeHtml(item.accession)}</span>` : ''}
-            </div>
-            <div class="match-line"><strong>Matched ${escapeHtml(item.target)}:</strong> ${escapeHtml(item.context)}</div>
-            <div class="badges">${badges}</div>
-          </div>
-          <div class="result-links">
-            <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">Open filing ↗</a>
-            <a href="${escapeHtml(item.secSearchUrl)}" target="_blank" rel="noreferrer">SEC search ↗</a>
-            <button class="copy-button" type="button" data-copy="${escapeHtml(item.url)}">Copy URL</button>
-          </div>
-        </article>`;
-    });
-
-    const errorCards = errors.map(error => `<div class="error-card"><strong>${escapeHtml(error.target)}</strong>: ${escapeHtml(error.message)} <a href="${escapeHtml(error.url)}" target="_blank" rel="noreferrer">Open this search directly on SEC.gov ↗</a></div>`);
-    ui.results.innerHTML = [...errorCards, ...cards].join('');
-  }
-
-  function updateHistory(targets) {
+  function remember(items) {
     if (!ui.rememberSearches.checked) return;
     const existing = readHistory();
-    const next = [...targets, ...existing].filter((value, index, array) => array.indexOf(value) === index).slice(0, 30);
+    const next = [...items, ...existing].filter((item, index, array) => array.indexOf(item) === index).slice(0, 40);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
     renderHistory();
   }
 
   function readHistory() {
     try {
-      const value = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
-      return Array.isArray(value) ? value : [];
+      const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
   }
 
   function renderHistory() {
-    const history = readHistory();
-    if (!history.length) {
-      ui.history.innerHTML = '<span class="history-empty">No locally saved search targets yet.</span>';
-      return;
-    }
-    ui.history.innerHTML = history.map(target => `<button type="button" data-history="${escapeHtml(target)}">${escapeHtml(target)}</button>`).join('');
+    const items = readHistory();
+    ui.history.innerHTML = items.length
+      ? items.map(item => `<button type="button" data-history="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join('')
+      : '<span class="history-empty">No locally saved keywords yet.</span>';
   }
 
-  async function runSearch() {
-    const targets = parseTargets();
-    if (!targets.length) {
-      ui.queries.focus();
-      setStatus('Enter a target', 'error');
-      return;
+  function renderQueue() {
+    ui.emptyState.hidden = queue.length > 0;
+    ui.results.innerHTML = queue.map((item, index) => `
+      <article class="result-card">
+        <div class="score high"><strong>${String(index + 1).padStart(2, '0')}</strong><small>search</small></div>
+        <div class="result-main">
+          <h3>${escapeHtml(item.label)}</h3>
+          <div class="result-meta">
+            <span>${escapeHtml(ui.forms.options[ui.forms.selectedIndex].text)}</span>
+            <span>${escapeHtml(ui.matchMode.options[ui.matchMode.selectedIndex].text)}</span>
+          </div>
+          <div class="match-line"><strong>SEC query:</strong> ${escapeHtml(item.query)}</div>
+          <div class="badges"><span class="badge signal">SEC.GOV</span><span class="badge">NO API</span></div>
+        </div>
+        <div class="result-links">
+          <button class="copy-button" type="button" data-open="${escapeHtml(item.url)}">Search SEC ↗</button>
+          <button class="copy-button" type="button" data-copy="${escapeHtml(item.query)}">Copy query</button>
+          <button class="copy-button" type="button" data-remove="${index}">Remove</button>
+        </div>
+      </article>`).join('');
+    updateStats();
+  }
+
+  function validateKeywords() {
+    const items = keywords();
+    if (!items.length) {
+      ui.queryStatus.textContent = 'Enter at least one keyword';
+      ui.keywords.focus();
+      return null;
     }
+    return items;
+  }
 
-    controller?.abort();
-    controller = new AbortController();
-    allResults = [];
-    errors = [];
-    ui.searchButton.disabled = true;
-    ui.stopButton.disabled = false;
-    setStatus('Searching', 'busy');
-    setProgress(0, targets.length, `Preparing ${targets.length} target${targets.length === 1 ? '' : 's'}`);
-    render();
-    updateHistory(targets);
+  function buildIndividualQueue() {
+    const items = validateKeywords();
+    if (!items) return;
 
-    let completed = 0;
+    queue = items.map(item => {
+      const query = buildQuery([item]);
+      return { label: item, query, url: buildSecUrl(query) };
+    });
+
+    remember(items);
+    ui.queryStatus.textContent = `${queue.length} SEC searches ready`;
+    renderQueue();
+  }
+
+  function searchCombined() {
+    const items = validateKeywords();
+    if (!items) return;
+
+    const query = buildQuery(items);
+    remember(items);
+    ui.queryStatus.textContent = `Opening combined search for ${items.length} keyword${items.length === 1 ? '' : 's'}`;
+    openUrl(buildSecUrl(query));
+  }
+
+  async function copyText(text, successMessage) {
     try {
-      for (const target of targets) {
-        if (controller.signal.aborted) break;
-        setProgress(completed, targets.length, `Searching ${target}`);
-        try {
-          const matches = await searchTarget(target, controller.signal);
-          allResults.push(...matches);
-        } catch (error) {
-          if (error?.name === 'AbortError') throw error;
-          errors.push({ target, message: `${error.message}. Your browser may be blocking cross origin EDGAR search requests.`, url: makeSecFallbackUrl(target) });
-        }
-        completed += 1;
-        setProgress(completed, targets.length, `${completed} of ${targets.length} targets complete`);
-        render();
-        if (completed < targets.length) await sleep(REQUEST_DELAY_MS, controller.signal);
-      }
-
-      if (controller.signal.aborted) {
-        setStatus('Stopped', 'error');
-        setProgress(completed, targets.length, `Stopped after ${completed} of ${targets.length} targets`);
-      } else if (errors.length && !allResults.length) {
-        setStatus('SEC browser block', 'error');
-        setProgress(targets.length, targets.length, 'Use the direct SEC search links below');
-      } else {
-        setStatus('Complete', 'ok');
-        setProgress(targets.length, targets.length, `${allResults.length} matches collected`);
-      }
-    } catch (error) {
-      if (error?.name === 'AbortError') {
-        setStatus('Stopped', 'error');
-        setProgress(completed, targets.length, `Stopped after ${completed} of ${targets.length} targets`);
-      } else {
-        errors.push({ target: 'Search', message: error.message || String(error), url: SEC_FULL_TEXT });
-        setStatus('Error', 'error');
-      }
-    } finally {
-      ui.searchButton.disabled = false;
-      ui.stopButton.disabled = true;
-      controller = null;
-      render();
-    }
-  }
-
-  function exportRows() {
-    return visibleResults().map(item => ({
-      matched_target: item.target,
-      target_type: item.targetType,
-      relevance_score: item.score,
-      company: item.company,
-      cik: item.cik,
-      form: item.form,
-      filed: item.filed,
-      period_of_report: item.period,
-      accession_number: item.accession,
-      defense_signals: item.signals.join('; '),
-      context: item.context,
-      filing_url: item.url,
-      sec_search_url: item.secSearchUrl
-    }));
-  }
-
-  function download(name, content, type) {
-    const blob = new Blob([content], { type });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = name;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  function csvEscape(value) {
-    const text = String(value ?? '');
-    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-  }
-
-  function exportCsv() {
-    const rows = exportRows();
-    if (!rows.length) return;
-    const headers = Object.keys(rows[0]);
-    const csv = [headers.join(','), ...rows.map(row => headers.map(key => csvEscape(row[key])).join(','))].join('\r\n');
-    download(`edgar-part-hunter-${new Date().toISOString().slice(0, 10)}.csv`, `\ufeff${csv}`, 'text/csv;charset=utf-8');
-  }
-
-  function exportJson() {
-    const payload = {
-      exported_at: new Date().toISOString(),
-      source: 'SEC EDGAR full text search',
-      targets: parseTargets(),
-      results: exportRows()
-    };
-    download(`edgar-part-hunter-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(payload, null, 2), 'application/json');
-  }
-
-  ui.searchButton.addEventListener('click', runSearch);
-  ui.stopButton.addEventListener('click', () => controller?.abort());
-  ui.resultFilter.addEventListener('input', render);
-  ui.sortResults.addEventListener('change', render);
-  ui.defenseOnly.addEventListener('change', render);
-  ui.exportCsv.addEventListener('click', exportCsv);
-  ui.exportJson.addEventListener('click', exportJson);
-  ui.clearHistory.addEventListener('click', () => { localStorage.removeItem(HISTORY_KEY); renderHistory(); });
-  ui.loadExample.addEventListener('click', () => {
-    ui.queries.value = ['4G16311', 'F34601-99-D-0002', 'T56', 'government furnished material'].join('\n');
-    ui.targetCount.textContent = '4';
-  });
-  ui.queries.addEventListener('input', () => { if (!allResults.length) ui.targetCount.textContent = String(parseTargets().length); });
-  ui.queries.addEventListener('keydown', event => {
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') runSearch();
-  });
-  ui.results.addEventListener('click', async event => {
-    const button = event.target.closest('[data-copy]');
-    if (!button) return;
-    try {
-      await navigator.clipboard.writeText(button.dataset.copy);
-      const old = button.textContent;
-      button.textContent = 'Copied';
-      setTimeout(() => { button.textContent = old; }, 900);
+      await navigator.clipboard.writeText(text);
+      ui.queryStatus.textContent = successMessage;
     } catch {
-      window.prompt('Copy filing URL', button.dataset.copy);
+      window.prompt('Copy text', text);
     }
+  }
+
+  ui.searchCombined.addEventListener('click', searchCombined);
+  ui.buildQueue.addEventListener('click', buildIndividualQueue);
+  ui.copyQuery.addEventListener('click', () => {
+    const items = validateKeywords();
+    if (!items) return;
+    copyText(buildQuery(items), 'Query copied');
   });
+
+  ui.openAll.addEventListener('click', () => {
+    if (!queue.length) return;
+    queue.forEach(item => window.open(item.url, '_blank', 'noopener,noreferrer'));
+    ui.queryStatus.textContent = `Opened ${queue.length} SEC searches`;
+  });
+
+  ui.clearQueue.addEventListener('click', () => {
+    queue = [];
+    ui.queryStatus.textContent = 'Search queue cleared';
+    renderQueue();
+  });
+
+  ui.loadExample.addEventListener('click', () => {
+    ui.keywords.value = ['4G16311', 'F34601-99-D-0002', 'T56', 'government furnished material'].join('\n');
+    updateStats();
+    ui.queryStatus.textContent = 'Examples loaded';
+  });
+
+  ui.keywords.addEventListener('input', updateStats);
+  ui.excludeKeywords.addEventListener('input', updateStats);
+  ui.matchMode.addEventListener('change', updateStats);
+
+  ui.clearHistory.addEventListener('click', () => {
+    localStorage.removeItem(HISTORY_KEY);
+    renderHistory();
+  });
+
   ui.history.addEventListener('click', event => {
     const button = event.target.closest('[data-history]');
     if (!button) return;
-    const current = parseTargets();
-    if (!current.includes(button.dataset.history)) current.push(button.dataset.history);
-    ui.queries.value = current.join('\n');
-    ui.targetCount.textContent = String(current.length);
-    ui.queries.focus();
+    const items = keywords();
+    if (!items.includes(button.dataset.history)) items.push(button.dataset.history);
+    ui.keywords.value = items.join('\n');
+    updateStats();
+    ui.queryStatus.textContent = `${button.dataset.history} added`;
+  });
+
+  ui.results.addEventListener('click', event => {
+    const openButton = event.target.closest('[data-open]');
+    if (openButton) {
+      openUrl(openButton.dataset.open);
+      return;
+    }
+
+    const copyButton = event.target.closest('[data-copy]');
+    if (copyButton) {
+      copyText(copyButton.dataset.copy, 'Query copied');
+      return;
+    }
+
+    const removeButton = event.target.closest('[data-remove]');
+    if (removeButton) {
+      queue.splice(Number(removeButton.dataset.remove), 1);
+      renderQueue();
+      ui.queryStatus.textContent = 'Search removed';
+    }
   });
 
   renderHistory();
-  render();
+  renderQueue();
+  updateStats();
 })();
