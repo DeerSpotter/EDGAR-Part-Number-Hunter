@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07111f">
   <title>EDGAR Part Number Hunter</title>
-  <meta name="description" content="Build SEC EDGAR full text searches for part numbers, NSNs, contract numbers, and technical keywords without an API.">
+  <meta name="description" content="Search SEC EDGAR filings for part numbers, NSNs, contract numbers, and technical keywords.">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="search.css">
 </head>
@@ -15,7 +15,7 @@
       <div class="mark" aria-hidden="true">EH</div>
       <div>
         <h1>EDGAR Part Number Hunter</h1>
-        <p>Keyword search builder for SEC filings</p>
+        <p>Full text keyword search for SEC filings</p>
       </div>
     </div>
     <a class="ghost-link" href="https://www.sec.gov/edgar/search/" target="_blank" rel="noreferrer">SEC Full Text Search ↗</a>
@@ -26,15 +26,15 @@
       <div class="section-heading">
         <div>
           <span class="eyebrow">KEYWORD SEARCH</span>
-          <h2>Search EDGAR like a contract database</h2>
+          <h2>Find identifiers buried in EDGAR</h2>
         </div>
-        <span class="status-pill ok">No API</span>
+        <span class="status-pill" id="workerStatus">Checking Worker</span>
       </div>
 
       <label for="keywords">Keywords or identifiers</label>
-      <textarea id="keywords" rows="7" spellcheck="false" placeholder="One keyword or identifier per line&#10;&#10;4G16311&#10;F34601-99-D-0002&#10;T56&#10;government furnished material"></textarea>
+      <textarea id="keywords" rows="7" spellcheck="false" placeholder="One keyword or identifier per line&#10;&#10;launcher&#10;4G16311&#10;F34601-99-D-0002&#10;government furnished material"></textarea>
       <div class="hint-row">
-        <span>One item per line. Build one combined SEC search or individual searches.</span>
+        <span>One item per line. The Worker searches SEC EDGAR and returns filing matches here.</span>
         <button class="text-button" id="loadExample" type="button">Load examples</button>
       </div>
 
@@ -66,6 +66,14 @@
           <label for="endDate">Filed before</label>
           <input id="endDate" type="date">
         </div>
+        <div class="field compact">
+          <label for="limit">Results</label>
+          <select id="limit">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
       </div>
 
       <label for="excludeKeywords">Exclude keywords <span class="optional">optional</span></label>
@@ -73,42 +81,48 @@
 
       <div class="options-row">
         <label class="check"><input id="rememberSearches" type="checkbox" checked><span>Remember searches on this device</span></label>
-        <label class="check"><input id="openNewTab" type="checkbox" checked><span>Open SEC in a new tab</span></label>
       </div>
 
       <div class="action-row">
-        <button class="primary" id="searchCombined" type="button">Search SEC</button>
-        <button class="secondary" id="buildQueue" type="button">Build individual searches</button>
+        <button class="primary" id="searchButton" type="button">Search EDGAR</button>
+        <button class="secondary" id="stopButton" type="button" disabled>Stop</button>
         <button class="secondary" id="copyQuery" type="button">Copy query</button>
         <span id="queryStatus" class="progress-text">Enter keywords to begin</span>
       </div>
+      <div class="progress-track" aria-hidden="true"><div id="progressBar" class="progress-bar"></div></div>
 
-      <p class="notice"><strong>No SEC API is used.</strong> This page only builds normal SEC EDGAR full text search URLs and sends your search to SEC.gov when you press a button.</p>
+      <p class="notice">Searches run through the connected Cloudflare Worker at <code>edgar-part-number-hunter.spotterdeer.workers.dev</code>. Filing links still point directly to SEC.gov.</p>
     </section>
 
     <section class="stats" aria-label="Search statistics">
       <article><span id="keywordCount">0</span><small>Keywords</small></article>
-      <article><span id="excludeCount">0</span><small>Excluded</small></article>
-      <article><span id="searchCount">0</span><small>Searches built</small></article>
-      <article><span id="modeLabel">EXACT</span><small>Logic</small></article>
+      <article><span id="resultCount">0</span><small>Matches shown</small></article>
+      <article><span id="totalCount">0</span><small>SEC matches</small></article>
+      <article><span id="companyCount">0</span><small>Companies</small></article>
     </section>
 
     <section class="panel results-panel">
       <div class="section-heading results-heading">
         <div>
-          <span class="eyebrow">SEARCH QUEUE</span>
-          <h2>SEC keyword searches</h2>
+          <span class="eyebrow">RESULTS</span>
+          <h2>Matched SEC filings</h2>
         </div>
         <div class="result-actions">
-          <button class="secondary" id="openAll" type="button" disabled>Open all</button>
-          <button class="secondary" id="clearQueue" type="button" disabled>Clear</button>
+          <input id="resultFilter" type="search" placeholder="Filter results">
+          <select id="sortResults" aria-label="Sort results">
+            <option value="date">Newest filing</option>
+            <option value="company">Company</option>
+            <option value="form">Form</option>
+          </select>
+          <button class="secondary" id="exportCsv" type="button" disabled>CSV</button>
+          <button class="secondary" id="exportJson" type="button" disabled>JSON</button>
         </div>
       </div>
 
       <div id="emptyState" class="empty-state">
         <div class="radar" aria-hidden="true"><span></span></div>
-        <h3>No search queue yet</h3>
-        <p>Enter part numbers, contract numbers, NSNs, program names, or technical terms. Build individual searches to create one SEC.gov search card for each keyword.</p>
+        <h3>No EDGAR hunt started</h3>
+        <p>Search a part number, NSN, contract number, program name, or technical term. Actual matching SEC filings will appear here.</p>
       </div>
 
       <div id="results" class="results" aria-live="polite"></div>
@@ -128,7 +142,7 @@
 
   <footer>
     <p>Independent research tool. Not affiliated with or endorsed by the U.S. Securities and Exchange Commission.</p>
-    <p>All searches open on <a href="https://www.sec.gov/edgar/search/" target="_blank" rel="noreferrer">SEC.gov</a>.</p>
+    <p>Filing source data opens on <a href="https://www.sec.gov/" target="_blank" rel="noreferrer">SEC.gov</a>.</p>
   </footer>
 
   <script src="app.js" defer></script>

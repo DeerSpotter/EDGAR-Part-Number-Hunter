@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "edgar-part-number-hunter",
+  "main": "worker/src/index.js",
+  "compatibility_date": "2026-07-06",
+  "observability": {
+    "enabled": true
+  }
+}
