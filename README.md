@@ -46,19 +46,30 @@ The repository root `wrangler.jsonc` points Cloudflare Git deployments directly 
 worker/src/index.js
 ```
 
+The repository also includes a root `package.json` with deterministic Wrangler commands:
+
+```text
+npm run deploy
+npm run dev
+npm run check
+```
+
 The Worker exposes:
 
 ```text
 GET /health
+GET /diagnostic
 GET /search?q=launcher&startdt=1994-01-01&enddt=2026-07-06&size=50
 ```
 
-Cloudflare should deploy the Worker named `edgar-part-number-hunter` from the repository root using `npx wrangler deploy`. The Pages app checks `/health` on load and shows `Worker online` when the deployed Worker matches this implementation.
+`/diagnostic` compares the SEC full text search endpoint with a documented static SEC data endpoint. This distinguishes a general SEC connectivity failure from an EFTS specific refusal.
 
-The Worker sends an identifying User Agent to SEC EDGAR, caps result size at 100, caches identical searches for 60 seconds, and returns CORS enabled JSON for the Pages UI.
+The Worker uses a declared SEC contact User Agent configured in `wrangler.jsonc`, caps result size at 100, caches identical successful searches for 60 seconds, and returns CORS enabled JSON for the Pages UI.
+
+Cloudflare should deploy the Worker named `edgar-part-number-hunter` from the repository root using `npm run deploy` or `npx wrangler deploy`.
 
 ## GitHub Pages
 
-The application lives in `docs/`. The repository root contains an `index.html` redirect so the project URL reaches the search interface when Pages is configured from the branch root. The existing Pages workflow can also deploy `docs/` through GitHub Actions after changes are merged to `main`.
+The application lives in `docs/`. GitHub Pages is configured from `main` and `/docs`.
 
 This project is independent and is not affiliated with or endorsed by the U.S. Securities and Exchange Commission.
